@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EdgeGuard 工業物聯網儀表板 — Delta PLC & Arduino 控制中心</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js for real-time telemetry -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    .led-glow-green { box-shadow: 0 0 10px #10b981; }
+    .led-glow-red { box-shadow: 0 0 12px #ef4444; }
+    .led-glow-amber { box-shadow: 0 0 10px #f59e0b; }
+    .led-glow-blue { box-shadow: 0 0 10px #3b82f6; }
+    .pulse-alarm { animation: pulse-red 1s infinite alternate; }
+    @keyframes pulse-red {
+      from { box-shadow: 0 0 5px #ef4444; }
+      to { box-shadow: 0 0 25px #ef4444; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-emerald-500 selection:text-white">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-50 shadow-lg">
+    <div class="flex items-center space-x-3">
+      <div class="h-9 w-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+        <i data-lucide="shield-check" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <span class="font-bold text-lg tracking-wide text-white">Edge<span class="text-emerald-400">Guard</span></span>
+          <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">IoT SCADA Hub</span>
+          <span id="badge-mode-type" class="text-xs px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700 font-mono">SIMULATION</span>
+        </div>
+        <p class="text-xs text-slate-400">Delta DVP-12SE11R PLC + Arduino UNO 24V Fan Safety Controller</p>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Status Pills -->
+    <div class="flex items-center space-x-3 text-xs font-mono">
+      <!-- PLC Link -->
+      <div class="flex items-center space-x-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <span id="plc-led" class="h-2.5 w-2.5 rounded-full bg-emerald-500 led-glow-green"></span>
+        <span class="text-slate-400">PLC Modbus:</span>
+        <span id="plc-ip" class="text-slate-200">192.168.1.5:502</span>
+      </div>
+
+      <!-- Arduino Link -->
+      <div class="flex items-center space-x-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <span id="arduino-led" class="h-2.5 w-2.5 rounded-full bg-emerald-500 led-glow-green"></span>
+        <span class="text-slate-400">Arduino:</span>
+        <span id="arduino-port" class="text-slate-200">115200 bps</span>
+      </div>
+
+      <!-- System Time -->
+      <div class="hidden md:flex items-center space-x-1.5 text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <i data-lucide="clock" class="w-3.5 h-3.5"></i>
+        <span id="clock-display">--:--:--</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Alarm Banner (shown when tripped) -->
+  <div id="alarm-banner" class="hidden bg-red-950/80 border-b border-red-600/50 px-6 py-2.5 text-red-200 text-sm flex items-center justify-between pulse-alarm">
+    <div class="flex items-center space-x-2 font-medium">
+      <i data-lucide="alert-triangle" class="w-5 h-5 text-red-400"></i>
+      <span id="alarm-message">CRITICAL: 安全互鎖觸發！設備已自動煞停切斷，請依程序檢視並手動復歸。</span>
+    </div>
+    <button onclick="controlCommand('reset')" class="text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-3 py-1 rounded transition-colors shadow">
+      立即復歸 (RESET)
+    </button>
+  </div>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
+
+    <!-- KPI Summary Row -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Card 1: Equipment State -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+          <span>設備運轉狀態</span>
+          <i data-lucide="activity" class="w-4 h-4 text-slate-500"></i>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="kpi-eq-state" class="text-2xl font-bold font-mono text-emerald-400">RUNNING</span>
+        </div>
+        <div class="mt-2 text-xs flex items-center text-slate-400">
+          <span id="kpi-relay-state" class="text-slate-300">Y0 繼電器導通 (24V 供電中)</span>
+        </div>
+      </div>
+
+      <!-- Card 2: Control Mode -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+          <span>控制架構模式</span>
+          <i data-lucide="sliders" class="w-4 h-4 text-slate-500"></i>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="kpi-mode" class="text-2xl font-bold font-mono text-cyan-400">AUTO</span>
+          <span class="text-xs text-slate-400">(AI 防護中)</span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400 flex items-center justify-between">
+          <span>X0 切換開關: <strong id="kpi-x0-status" class="text-cyan-300 font-mono">1 (AUTO)</strong></span>
+          <button onclick="toggleMode()" class="text-slate-400 hover:text-white underline text-xs">切換模式</button>
+        </div>
+      </div>
+
+      <!-- Card 3: Target Speed vs PWM -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+          <span>設定轉速 / PWM 佔空比</span>
+          <i data-lucide="gauge" class="w-4 h-4 text-slate-500"></i>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="kpi-speed" class="text-2xl font-bold font-mono text-amber-400">50</span>
+          <span class="text-slate-400 font-mono text-sm">%</span>
+          <span class="text-xs text-slate-400 font-mono ml-auto" id="kpi-pwm">PWM: 128 / 255</span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          <span>PLC D2 暫存器寫入值</span>
+        </div>
+      </div>
+
+      <!-- Card 4: Actual Measured RPM -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow">
+        <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+          <span>實測轉速 (Tachometer)</span>
+          <i data-lucide="wind" class="w-4 h-4 text-slate-500"></i>
+        </div>
+        <div class="flex items-baseline space-x-2">
+          <span id="kpi-rpm" class="text-2xl font-bold font-mono text-white">1420</span>
+          <span class="text-slate-400 font-mono text-sm">RPM</span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          <span>Arduino D2 硬體中斷回傳</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Operational Workspace: Gauge + Chart + Controls -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- Left Column: Circular Tachometer Gauge (4 Cols) -->
+      <div class="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col items-center justify-between shadow">
+        <div class="w-full flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold text-slate-200">實時轉速儀表 (RPM Gauge)</span>
+          <span class="text-xs font-mono text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">2800 MAX</span>
+        </div>
+
+        <div class="relative w-64 h-64 flex items-center justify-center my-2">
+          <canvas id="gaugeCanvas" width="256" height="256" class="w-full h-full"></canvas>
+          <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-10">
+            <span id="gauge-rpm-val" class="text-3xl font-bold font-mono text-white tracking-wider">0</span>
+            <span class="text-xs text-slate-400 font-mono">RPM</span>
+          </div>
+        </div>
+
+        <div class="w-full grid grid-cols-2 gap-2 text-center text-xs font-mono pt-2 border-t border-slate-800">
+          <div class="bg-slate-950 p-2 rounded border border-slate-800/80">
+            <span class="text-slate-400 block text-[10px]">目標百分比</span>
+            <span id="gauge-target-display" class="font-bold text-amber-400 text-sm">50 %</span>
+          </div>
+          <div class="bg-slate-950 p-2 rounded border border-slate-800/80">
+            <span class="text-slate-400 block text-[10px]">電機輸出佔比</span>
+            <span id="gauge-pwm-display" class="font-bold text-cyan-400 text-sm">50.2 %</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Middle Column: Live Telemetry Trend Chart (8 Cols) -->
+      <div class="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between shadow">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center space-x-2">
+            <i data-lucide="line-chart" class="w-4 h-4 text-emerald-400"></i>
+            <span class="text-sm font-semibold text-slate-200">即時遙測趨勢 (Real-time RPM & Speed Telemetry)</span>
+          </div>
+          <div class="flex items-center space-x-3 text-xs font-mono">
+            <span class="flex items-center space-x-1.5"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span class="text-slate-400">轉速 (RPM)</span></span>
+            <span class="flex items-center space-x-1.5"><span class="h-2 w-2 rounded-full bg-amber-400"></span><span class="text-slate-400">設定速度 (%)</span></span>
+          </div>
+        </div>
+
+        <div class="relative h-64 w-full">
+          <canvas id="telemetryChart"></canvas>
+        </div>
+
+        <div class="flex items-center justify-between text-xs text-slate-500 pt-3 border-t border-slate-800">
+          <span>採樣頻率：10 Hz · 高頻遙測推播</span>
+          <span>保留最近 60 秒軌跡</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Control Desk & Simulation Triggers Row -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- Speed & Equipment Control Desk (7 Cols) -->
+      <div class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-5 shadow">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center space-x-2">
+            <i data-lucide="command" class="w-4 h-4 text-cyan-400"></i>
+            <span class="text-sm font-semibold text-slate-200">操作控制面板 (Operator Controls)</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <button onclick="controlCommand('start')" class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1.5 rounded transition flex items-center space-x-1 shadow">
+              <i data-lucide="play" class="w-3.5 h-3.5"></i>
+              <span>啟動 (START)</span>
+            </button>
+            <button onclick="controlCommand('stop')" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium px-3 py-1.5 rounded transition flex items-center space-x-1 shadow">
+              <i data-lucide="square" class="w-3.5 h-3.5"></i>
+              <span>停止 (STOP)</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Speed Slider & Presets -->
+        <div class="space-y-3">
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-slate-300 font-medium">風扇目標轉速調節 (Fan Speed Setpoint)</span>
+            <span id="slider-val" class="font-mono text-amber-400 text-sm font-bold">50 %</span>
+          </div>
+          <input id="speed-slider" type="range" min="0" max="100" value="50" oninput="onSliderInput(this.value)" class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+          
+          <div class="grid grid-cols-5 gap-2 pt-1">
+            <button onclick="setSpeed(0)" class="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 rounded transition border border-slate-700/50">0%</button>
+            <button onclick="setSpeed(25)" class="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 rounded transition border border-slate-700/50">25%</button>
+            <button onclick="setSpeed(50)" class="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 rounded transition border border-slate-700/50">50%</button>
+            <button onclick="setSpeed(75)" class="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 rounded transition border border-slate-700/50">75%</button>
+            <button onclick="setSpeed(100)" class="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 rounded transition border border-slate-700/50">100%</button>
+          </div>
+        </div>
+
+        <!-- Mode Toggle & Safety Interlocks Actions -->
+        <div class="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center space-x-2">
+            <span class="text-xs text-slate-400">操作模式:</span>
+            <button id="btn-mode-auto" onclick="setMode('AUTO')" class="text-xs px-3 py-1 rounded bg-cyan-600 text-white font-medium">AUTO</button>
+            <button id="btn-mode-manual" onclick="setMode('MANUAL')" class="text-xs px-3 py-1 rounded bg-slate-800 text-slate-400 font-medium hover:text-white">MANUAL</button>
+          </div>
+          <div class="flex items-center space-x-2">
+            <button onclick="controlCommand('reset')" class="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded transition flex items-center space-x-1">
+              <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+              <span>安全復歸 (RESET)</span>
+            </button>
+            <button onclick="controlCommand('e_stop')" class="text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-3 py-1.5 rounded transition flex items-center space-x-1 shadow-lg shadow-red-950">
+              <i data-lucide="octagon-alert" class="w-3.5 h-3.5"></i>
+              <span>實體急停 (E-STOP)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Hazard Simulation Desk (5 Cols) -->
+      <div class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow flex flex-col justify-between">
+        <div class="border-b border-slate-800 pb-3 flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <i data-lucide="camera" class="w-4 h-4 text-amber-400"></i>
+            <span class="text-sm font-semibold text-slate-200">AI 視覺事件模擬 (AI Vision Ingress)</span>
+          </div>
+          <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">PoC Test Deck</span>
+        </div>
+
+        <p class="text-xs text-slate-400 leading-relaxed">
+          此面板供在無外接攝影機時測試現場邏輯：模擬工作人員跨越電子圍籬危險區，驗證 PLC 階梯圖互鎖阻斷與自鎖保護行為。
+        </p>
+
+        <div class="grid grid-cols-2 gap-3">
+          <button id="btn-intrude" onclick="controlCommand('trigger_intrusion')" class="text-xs bg-red-950/60 hover:bg-red-900/80 border border-red-700/60 text-red-200 py-3 px-3 rounded-lg flex flex-col items-center justify-center space-y-1 transition">
+            <i data-lucide="user-x" class="w-5 h-5 text-red-400"></i>
+            <span class="font-bold">模擬人員進區</span>
+            <span class="text-[10px] text-red-300/80">觸發 PLC M0 線圈</span>
+          </button>
+          <button id="btn-clear-zone" onclick="controlCommand('clear_intrusion')" class="text-xs bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-200 py-3 px-3 rounded-lg flex flex-col items-center justify-center space-y-1 transition">
+            <i data-lucide="user-check" class="w-5 h-5 text-emerald-400"></i>
+            <span class="font-bold">人員離開區域</span>
+            <span class="text-[10px] text-emerald-300/80">清空進區標誌</span>
+          </button>
+        </div>
+
+        <div class="text-[11px] bg-slate-950 p-2.5 rounded border border-slate-800 text-slate-400">
+          <div class="flex justify-between">
+            <span>區域偵測狀態:</span>
+            <span id="zone-status-text" class="font-mono font-bold text-emerald-400">CLEAR (正常無人)</span>
+          </div>
+          <div class="flex justify-between mt-1">
+            <span>自鎖復歸狀態:</span>
+            <span id="latch-status-text" class="font-mono font-bold text-slate-300">UNLATCHED</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delta PLC Modbus & I/O Inspector -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="cpu" class="w-4 h-4 text-emerald-400"></i>
+          <span class="text-sm font-semibold text-slate-200">台達 DVP-12SE11R PLC 即時 I/O 狀態檢視器 (Modbus Register Map)</span>
+        </div>
+        <span class="text-xs text-slate-500 font-mono">Modbus TCP Port 502 · Delta SE Series</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Physical Inputs (X0 ~ X5) -->
+        <div class="space-y-2">
+          <span class="text-xs font-semibold text-slate-400 block uppercase tracking-wider">數位輸入 (Discrete Inputs X)</span>
+          <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+            <div id="io-x0" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X0 [AUTO]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-x1" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X1 [E-STOP]</span>
+              <span class="io-val font-bold text-slate-500">1</span>
+            </div>
+            <div id="io-x2" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X2 [RESET]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-x3" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X3 [START]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-x4" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X4 [STOP]</span>
+              <span class="io-val font-bold text-slate-500">1</span>
+            </div>
+            <div id="io-x5" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">X5 [ARD_OK]</span>
+              <span class="io-val font-bold text-slate-500">1</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Physical Outputs (Y0 ~ Y3) -->
+        <div class="space-y-2">
+          <span class="text-xs font-semibold text-slate-400 block uppercase tracking-wider">繼電器輸出 (Relay Outputs Y)</span>
+          <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+            <div id="io-y0" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">Y0 [FAN_PWR]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-y1" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">Y1 [ALARM]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-y2" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">Y2 [SPD_GATE]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+            <div id="io-y3" class="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-800">
+              <span class="text-slate-400">Y3 [1HZ_HEART]</span>
+              <span class="io-val font-bold text-slate-500">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Holding Registers (D0, D1, D2, D3, D10) -->
+        <div class="space-y-2">
+          <span class="text-xs font-semibold text-slate-400 block uppercase tracking-wider">保持暫存器 (Holding Registers D)</span>
+          <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+            <div class="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
+              <span class="text-slate-400">D0 [MODE]:</span>
+              <span id="reg-d0" class="text-cyan-400 font-bold">1</span>
+            </div>
+            <div class="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
+              <span class="text-slate-400">D1 [SAFETY]:</span>
+              <span id="reg-d1" class="text-emerald-400 font-bold">0</span>
+            </div>
+            <div class="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
+              <span class="text-slate-400">D2 [TARGET%]:</span>
+              <span id="reg-d2" class="text-amber-400 font-bold">50</span>
+            </div>
+            <div class="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between">
+              <span class="text-slate-400">D3 [ACT_RPM]:</span>
+              <span id="reg-d3" class="text-white font-bold">0</span>
+            </div>
+            <div class="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between col-span-2">
+              <span class="text-slate-400">D10 [WATCHDOG HEARTBEAT]:</span>
+              <span id="reg-d10" class="text-slate-300 font-bold">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Audit Event Log Table -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow space-y-3">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="clipboard-list" class="w-4 h-4 text-slate-400"></i>
+          <span class="text-sm font-semibold text-slate-200">事件與安全稽核日誌 (Safety Audit Trail)</span>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button onclick="clearLogs()" class="text-xs text-slate-400 hover:text-white px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 transition">清空日誌</button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs font-mono">
+          <thead>
+            <tr class="text-slate-400 border-b border-slate-800">
+              <th class="py-2 px-3 w-28">時間戳記</th>
+              <th class="py-2 px-3 w-24">等級</th>
+              <th class="py-2 px-3">事件詳情</th>
+            </tr>
+          </thead>
+          <tbody id="log-table-body" class="divide-y divide-slate-800/60">
+            <!-- Populated via SSE/JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-slate-950 border-t border-slate-800/80 px-6 py-4 text-xs text-slate-500 flex flex-wrap justify-between items-center gap-4 mt-auto">
+    <span>EdgeGuard Project · ASUS UGen AI League 2026 Stage I/II Implementation</span>
+    <span class="font-mono">Delta PLC Modbus TCP (Port 502) &bull; Arduino ATmega328P Serial (115200)</span>
+  </footer>
+
+  <!-- Application Logic -->
+  <script>
+    // System Local State
+    let telemetryChart = null;
+    const chartTimeLabels = [];
+    const chartRpmData = [];
+    const chartSpeedData = [];
+    const MAX_CHART_POINTS = 40;
+
+    // Initialize Chart.js
+    function initChart() {
+      const ctx = document.getElementById('telemetryChart').getContext('2d');
+      telemetryChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartTimeLabels,
+          datasets: [
+            {
+              label: 'Fan RPM',
+              data: chartRpmData,
+              borderColor: '#10b981',
+              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+              borderWidth: 2,
+              tension: 0.3,
+              fill: true,
+              yAxisID: 'yRPM'
+            },
+            {
+              label: 'Target Speed (%)',
+              data: chartSpeedData,
+              borderColor: '#f59e0b',
+              borderWidth: 2,
+              borderDash: [5, 5],
+              tension: 0.1,
+              yAxisID: 'ySpeed'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          scales: {
+            x: {
+              display: true,
+              grid: { color: 'rgba(51, 65, 85, 0.4)' },
+              ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } }
+            },
+            yRPM: {
+              type: 'linear',
+              position: 'left',
+              min: 0,
+              max: 3000,
+              grid: { color: 'rgba(51, 65, 85, 0.4)' },
+              ticks: { color: '#10b981', font: { family: 'JetBrains Mono', size: 10 } }
+            },
+            ySpeed: {
+              type: 'linear',
+              position: 'right',
+              min: 0,
+              max: 100,
+              grid: { drawOnChartArea: false },
+              ticks: { color: '#f59e0b', font: { family: 'JetBrains Mono', size: 10 } }
+            }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    }
+
+    // Canvas Gauge Renderer
+    function renderGauge(currentRpm, maxRpm = 2800) {
+      const canvas = document.getElementById('gaugeCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const radius = 95;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Background Arc
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0.75 * Math.PI, 2.25 * Math.PI, false);
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 14;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // Active Value Arc
+      const pct = Math.min(1.0, Math.max(0.0, currentRpm / maxRpm));
+      const endAngle = 0.75 * Math.PI + pct * 1.5 * Math.PI;
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0.75 * Math.PI, endAngle, false);
+      let strokeColor = '#10b981'; // Green
+      if (pct > 0.8) strokeColor = '#ef4444'; // Red
+      else if (pct > 0.6) strokeColor = '#f59e0b'; // Amber
+
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 14;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // Tick Marks
+      for (let i = 0; i <= 10; i++) {
+        const angle = 0.75 * Math.PI + (i / 10) * 1.5 * Math.PI;
+        const innerR = radius - 18;
+        const outerR = radius - 10;
+        const x1 = cx + Math.cos(angle) * innerR;
+        const y1 = cy + Math.sin(angle) * innerR;
+        const x2 = cx + Math.cos(angle) * outerR;
+        const y2 = cy + Math.sin(angle) * outerR;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = (i % 5 === 0) ? 2 : 1;
+        ctx.stroke();
+      }
+    }
+
+    // Connect to Server-Sent Events (SSE) stream
+    function initSSEStream() {
+      const evtSource = new EventSource('/api/stream');
+
+      evtSource.onmessage = function(event) {
+        try {
+          const data = JSON.parse(event.data);
+          updateUI(data);
+        } catch (e) {
+          console.error("Failed to parse SSE payload", e);
+        }
+      };
+
+      evtSource.onerror = function() {
+        console.warn("SSE connection interrupted, retrying in 2s...");
+        setTimeout(() => {}, 2000);
+      };
+    }
+
+    // Update Dashboard DOM with Live Snapshot
+    function updateUI(data) {
+      const sys = data.system;
+      const plc = data.plc;
+      const ard = data.arduino;
+
+      // 1. Top status badges
+      document.getElementById('badge-mode-type').textContent = sys.sim_mode ? "SIMULATION" : "LIVE HARDWARE";
+      document.getElementById('badge-mode-type').className = sys.sim_mode
+        ? "text-xs px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700 font-mono"
+        : "text-xs px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-700 font-mono";
+
+      document.getElementById('plc-ip').textContent = `${plc.host}:${plc.port}`;
+      document.getElementById('arduino-port').textContent = `${ard.port} (${ard.baud})`;
+
+      // 2. Alarm Banner
+      const alarmBanner = document.getElementById('alarm-banner');
+      if (sys.trip_latched || sys.safety_state === "TRIPPED") {
+        alarmBanner.classList.remove('hidden');
+        document.getElementById('alarm-message').textContent = sys.e_stop_pressed
+          ? "CRITICAL: 硬體急停開關 (E-STOP, X1) 斷開！風扇已全面停止，請鬆開按鈕並復歸。"
+          : "CRITICAL: AI 安全防護互鎖觸發 (闖入限制區)！設備已煞停，請確認現場並復歸。";
+      } else {
+        alarmBanner.classList.add('hidden');
+      }
+
+      // 3. KPI Cards
+      const kpiState = document.getElementById('kpi-eq-state');
+      if (sys.trip_latched) {
+        kpiState.textContent = "TRIPPED";
+        kpiState.className = "text-2xl font-bold font-mono text-red-500";
+      } else if (sys.equipment_running) {
+        kpiState.textContent = "RUNNING";
+        kpiState.className = "text-2xl font-bold font-mono text-emerald-400";
+      } else {
+        kpiState.textContent = "STOPPED";
+        kpiState.className = "text-2xl font-bold font-mono text-slate-400";
+      }
+
+      document.getElementById('kpi-relay-state').textContent = plc.outputs.Y0_FAN_POWER
+        ? "Y0 繼電器導通 (24V 供電中)"
+        : "Y0 繼電器斷開 (安全切斷中)";
+
+      document.getElementById('kpi-mode').textContent = sys.mode;
+      document.getElementById('kpi-x0-status').textContent = plc.inputs.X0_AUTO ? "1 (AUTO)" : "0 (MANUAL)";
+
+      document.getElementById('kpi-speed').textContent = sys.target_speed;
+      document.getElementById('kpi-pwm').textContent = `PWM: ${sys.pwm_value} / 255`;
+      document.getElementById('kpi-rpm').textContent = sys.actual_rpm;
+
+      // 4. Gauge update
+      document.getElementById('gauge-rpm-val').textContent = sys.actual_rpm;
+      document.getElementById('gauge-target-display').textContent = `${sys.target_speed} %`;
+      const pwmPct = ((sys.pwm_value / 255) * 100).toFixed(1);
+      document.getElementById('gauge-pwm-display').textContent = `${pwmPct} %`;
+      renderGauge(sys.actual_rpm, 2800);
+
+      // 5. Chart update
+      const nowStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      chartTimeLabels.push(nowStr);
+      chartRpmData.push(sys.actual_rpm);
+      chartSpeedData.push(sys.target_speed);
+
+      if (chartTimeLabels.length > MAX_CHART_POINTS) {
+        chartTimeLabels.shift();
+        chartRpmData.shift();
+        chartSpeedData.shift();
+      }
+      if (telemetryChart) telemetryChart.update();
+
+      // 6. Mode Buttons
+      if (sys.mode === "AUTO") {
+        document.getElementById('btn-mode-auto').className = "text-xs px-3 py-1 rounded bg-cyan-600 text-white font-medium";
+        document.getElementById('btn-mode-manual').className = "text-xs px-3 py-1 rounded bg-slate-800 text-slate-400 font-medium hover:text-white";
+      } else {
+        document.getElementById('btn-mode-auto').className = "text-xs px-3 py-1 rounded bg-slate-800 text-slate-400 font-medium hover:text-white";
+        document.getElementById('btn-mode-manual').className = "text-xs px-3 py-1 rounded bg-cyan-600 text-white font-medium";
+      }
+
+      // 7. AI Simulation Zone Texts
+      const zoneText = document.getElementById('zone-status-text');
+      if (sys.ai_zone_intruded) {
+        zoneText.textContent = "INTRUDED (人員闖入中)";
+        zoneText.className = "font-mono font-bold text-red-400";
+      } else {
+        zoneText.textContent = "CLEAR (正常無人)";
+        zoneText.className = "font-mono font-bold text-emerald-400";
+      }
+
+      const latchText = document.getElementById('latch-status-text');
+      latchText.textContent = sys.trip_latched ? "LATCHED (鎖定需復歸)" : "UNLATCHED (正常)";
+      latchText.className = sys.trip_latched ? "font-mono font-bold text-red-400" : "font-mono font-bold text-slate-300";
+
+      // 8. PLC I/O Indicators
+      updateIOBit('io-x0', plc.inputs.X0_AUTO);
+      updateIOBit('io-x1', plc.inputs.X1_ESTOP_NC);
+      updateIOBit('io-x2', plc.inputs.X2_RESET);
+      updateIOBit('io-x3', plc.inputs.X3_START);
+      updateIOBit('io-x4', plc.inputs.X4_STOP);
+      updateIOBit('io-x5', plc.inputs.X5_ARDUINO_OK);
+
+      updateIOBit('io-y0', plc.outputs.Y0_FAN_POWER);
+      updateIOBit('io-y1', plc.outputs.Y1_ALARM_STROBE, true); // true for red alarm glow
+      updateIOBit('io-y2', plc.outputs.Y2_SPEED_GATE);
+      updateIOBit('io-y3', plc.outputs.Y3_HEARTBEAT);
+
+      // 9. Registers
+      document.getElementById('reg-d0').textContent = plc.registers.D0_MODE;
+      document.getElementById('reg-d1').textContent = plc.registers.D1_SAFETY;
+      document.getElementById('reg-d2').textContent = plc.registers.D2_SPEED;
+      document.getElementById('reg-d3').textContent = plc.registers.D3_RPM;
+      document.getElementById('reg-d10').textContent = plc.registers.D10_HEARTBEAT;
+
+      // 10. Audit Logs
+      renderLogs(data.logs);
+    }
+
+    function updateIOBit(elemId, val, isAlarm = false) {
+      const el = document.getElementById(elemId);
+      if (!el) return;
+      const span = el.querySelector('.io-val');
+      if (val === 1) {
+        span.textContent = "1";
+        if (isAlarm) {
+          span.className = "io-val font-bold text-red-400 led-glow-red";
+        } else {
+          span.className = "io-val font-bold text-emerald-400 led-glow-green";
+        }
+      } else {
+        span.textContent = "0";
+        span.className = "io-val font-bold text-slate-600";
+      }
+    }
+
+    function renderLogs(logs) {
+      const tbody = document.getElementById('log-table-body');
+      if (!tbody || !logs) return;
+      let html = "";
+      for (const log of logs) {
+        let badgeClass = "bg-slate-800 text-slate-300";
+        if (log.level === "CRITICAL") badgeClass = "bg-red-950 text-red-300 border border-red-800";
+        else if (log.level === "WARN") badgeClass = "bg-amber-950 text-amber-300 border border-amber-800";
+        else if (log.level === "INFO") badgeClass = "bg-blue-950 text-blue-300 border border-blue-800";
+
+        html += `<tr>
+          <td class="py-1.5 px-3 text-slate-500 font-mono">${log.time}</td>
+          <td class="py-1.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${badgeClass}">${log.level}</span></td>
+          <td class="py-1.5 px-3 text-slate-300">${log.message}</td>
+        </tr>`;
+      }
+      tbody.innerHTML = html;
+    }
+
+    // Control API Dispatcher
+    async function controlCommand(action, payload = {}) {
+      try {
+        const res = await fetch('/api/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, payload })
+        });
+        const json = await res.json();
+        if (json.status !== 'ok') {
+          console.warn("Command returned non-ok:", json);
+        }
+      } catch (e) {
+        console.error("Control API Error", e);
+      }
+    }
+
+    function onSliderInput(val) {
+      document.getElementById('slider-val').textContent = `${val} %`;
+      controlCommand('set_speed', { speed: parseInt(val) });
+    }
+
+    function setSpeed(val) {
+      document.getElementById('speed-slider').value = val;
+      document.getElementById('slider-val').textContent = `${val} %`;
+      controlCommand('set_speed', { speed: val });
+    }
+
+    function setMode(mode) {
+      controlCommand('set_mode', { mode });
+    }
+
+    function toggleMode() {
+      const current = document.getElementById('kpi-mode').textContent;
+      setMode(current === 'AUTO' ? 'MANUAL' : 'AUTO');
+    }
+
+    function clearLogs() {
+      controlCommand('clear_logs');
+    }
+
+    // System clock
+    setInterval(() => {
+      document.getElementById('clock-display').textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+    }, 1000);
+
+    // Bootstrap
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      initChart();
+      initSSEStream();
+    });
+  </script>
+</body>
+</html>
