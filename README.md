@@ -1,4 +1,4 @@
-# EdgeGuard IoT — 工業自動化防護儀表板與 PLC / Arduino 控制核心
+# EdgeGuard — 工業自動化防護儀表板與 PLC / Arduino 控制核心
 
 > **EdgeGuard: Offline AI Safety Copilot for Legacy Industrial Equipment**  
 > 專為既有傳統工業設備設計之邊緣安全互鎖、高頻即時監控儀表板與實體控制整合專案。  
@@ -67,7 +67,7 @@ flowchart TD
 ## 2. 目錄結構 (Repository Layout)
 
 ```text
-edgeguard-iot/
+edgeguard/
 ├── README.md                      # 專案完整架構、接線指南與測試說明
 ├── run_dashboard.py               # 儀表板一鍵啟動腳本 (支援仿真與實體硬體)
 ├── .gitignore                     # Git 忽略配置檔
@@ -170,7 +170,7 @@ edgeguard-iot/
 
 ```bash
 # 切換至專案目錄
-cd edgeguard-iot
+cd edgeguard
 
 # 啟動儀表板伺服器（預設啟動高擬真電機物理與 PLC 階梯圖模擬器）
 python3 run_dashboard.py
