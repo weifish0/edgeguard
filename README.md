@@ -1,182 +1,197 @@
-# EdgeGuard — 工業自動化防護儀表板與 PLC / Arduino 控制核心
+# EdgeGuard — Industrial Safety Interlock & IoT SCADA Dashboard
 
 > **EdgeGuard: Offline AI Safety Copilot for Legacy Industrial Equipment**  
-> 專為既有傳統工業設備設計之邊緣安全互鎖、高頻即時監控儀表板與實體控制整合專案。  
-> 適用於 **ASUS UGen AI League 創新黑客松**（Battlefield Lightning 輕量運算組 / Stage I & Stage II）。
+> An edge-native industrial safety interlock, high-frequency telemetry dashboard, and physical control bridge designed for retrofit on existing industrial machinery.  
+> Target Platform: **ASUS UGen AI League** (Battlefield Lightning Track / Stage I & Stage II).
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Delta PLC](https://img.shields.io/badge/PLC-Delta%20DVP--12SE11R-red.svg)](plc/)
+[![MCU: Arduino](https://img.shields.io/badge/MCU-Arduino%20UNO%20(ATmega328P)-00979D.svg)](arduino/)
+[![Dashboard: Python SSE](https://img.shields.io/badge/Dashboard-Python%20%2F%20HTML5%20SCADA-emerald.svg)](dashboard/)
 
 ---
 
-## 1. 系統架構與設計理念 (System Architecture)
+## 1. System Architecture & Philosophy
 
-EdgeGuard 的核心理念是：**「讓既有設備取得現場感知能力，透過原有 PLC 執行受限制、可追溯且具備物理互鎖的反應。」**
+The guiding thesis of EdgeGuard is:
+> **"Understand the scene. Act through existing PLCs. Never bypass physical safety interlocks."**
 
-在工業安全規範中，純軟體或遠端 AI 模型絕不能具備任意覆蓋機台硬體的無限制權限。本專案透過 **台達 DVP-12SE11R PLC** 作為最終實體安全互鎖閘門，結合 **Arduino UNO 微控制器** 驅動 24V 風扇負載與轉速（Tachometer）回授，並透過 **EdgeGuard SCADA 工業物聯網儀表板** 提供 10 Hz 高頻即時遙測、事件軌跡稽核與雙向控制。
+In industrial environments, remote cloud software or AI models must **never** possess arbitrary, unconstrained authority to directly actuate factory equipment. EdgeGuard establishes a tiered architecture:
+1. **Perception Layer**: Edge vision detects hazardous situations (e.g., personnel entering restricted machine zones).
+2. **Decision Gateway**: Predefined safety rules formulate constrained control requests.
+3. **Hardware Interlock Layer (Delta PLC)**: Physical logic accepts or rejects AI requests based on physical mode switches (`AUTO` vs `MANUAL`), fail-safe emergency circuits, and watchdog timers.
+4. **Actuator & Telemetry Layer (Arduino UNO & Fan)**: Microcontroller executes PWM speed regulation, hardware watchdog monitoring, and reads real-time tachometer RPM pulses.
+5. **Supervisory Layer (SCADA Dashboard)**: Pushes 10 Hz real-time telemetry, visualizes PLC I/O rack states, and records an immutable safety audit trail.
 
 ```mermaid
 flowchart TD
-    subgraph UI_Layer ["上位監控與遙測層 (SCADA Dashboard)"]
+    subgraph UI_Layer ["Supervisory & Telemetry Layer (SCADA Web Dashboard)"]
         Dashboard["EdgeGuard Web SCADA\n(HTML5 / Canvas Gauge / Chart.js)"]
-        SSE_Stream["高頻推播通道 (SSE @ 10 Hz)"]
-        Rest_API["控制指令接口 (/api/control)"]
+        SSE_Stream["Real-time Telemetry Stream\n(Server-Sent Events @ 10 Hz)"]
+        Rest_API["Operator Command Interface\n(REST /api/control)"]
     end
 
-    subgraph Gateway_Layer ["邊緣閘道核心 (Edge Gateway & AI)"]
-        Gateway["Python Gateway Engine\n(Telemetry, Physics Model, Watchdog)"]
-        AI_Vision["輕量視覺辨識 / 電子圍籬事件\n(Person & Danger Zone Detection)"]
+    subgraph Gateway_Layer ["Edge Gateway & Perception Layer"]
+        Gateway["Python Gateway Core\n(Telemetry, Physics Engine, Watchdog)"]
+        AI_Vision["Local Vision Model / Electronic Fence\n(Person & Danger Zone Detection)"]
     end
 
-    subgraph Controller_Layer ["工業控制與實體互鎖層 (Industrial PLC)"]
-        PLC["台達 Delta DVP-12SE11R PLC\n(Modbus TCP Server : 502)"]
-        Mode_SW["實體開關 X0\n(AUTO / MANUAL)"]
-        E_Stop["實體急停 X1\n(Normally Closed NC)"]
-        Reset_PB["實體復歸按鈕 X2"]
+    subgraph Controller_Layer ["Industrial Control & Physical Interlock Layer (PLC)"]
+        PLC["Delta Electronics DVP-12SE11R PLC\n(Modbus TCP Server : 502)"]
+        Mode_SW["Physical Mode Switch X0\n(1=AUTO / 0=MANUAL)"]
+        E_Stop["Physical E-Stop Button X1\n(Normally Closed NC Circuit)"]
+        Reset_PB["Physical Reset Pushbutton X2"]
     end
 
-    subgraph Actuator_Layer ["執行機構與感測回授層 (Arduino & Fan)"]
+    subgraph Actuator_Layer ["Actuator & Sensor Feedback Layer (Arduino & Fan)"]
         Arduino["Arduino UNO (ATmega328P)\n(115200 bps Serial / D9 PWM)"]
-        MOSFET["LR7843 MOSFET 驅動模組\n(光耦隔離 + 10kΩ 下拉)"]
-        Fan["24V DC 工業風扇負載\n(獨立 24V 開關電源)"]
-        Tach["轉速計回授 (Tachometer)\n(Pin D2 / INT0 每轉 2 脈衝)"]
+        MOSFET["LR7843 MOSFET Driver\n(Optocoupled + 10kΩ Gate Pull-Down)"]
+        Fan["24V DC Industrial Fan Load\n(Isolated 24V Switch Mode PSU)"]
+        Tach["Fan Tachometer Feedback\n(Pin D2 / INT0: 2 Pulses/Rev)"]
     end
 
-    %% Connections
+    %% Communication Links
     Dashboard <--> SSE_Stream & Rest_API
     SSE_Stream & Rest_API <--> Gateway
-    AI_Vision -.->|侵入請求 M0| Gateway
+    AI_Vision -.->|Trip Request M0| Gateway
 
-    Gateway <-->|Modbus TCP Ethernet| PLC
-    Gateway <-->|USB CDC 115200 baud| Arduino
+    Gateway <-->|Modbus TCP / Ethernet (Port 502)| PLC
+    Gateway <-->|USB CDC Serial (115200 baud)| Arduino
 
     Mode_SW -->|DI X0| PLC
     E_Stop -->|DI X1| PLC
     Reset_PB -->|DI X2| PLC
 
-    PLC -->|DO Y0 主電源接觸器| MOSFET
-    PLC -->|DO Y2 轉速閘門信號| Arduino
-    PLC -->|DO Y1 警報蜂鳴器/閃燈| Alarms[現場警報聲光]
-    Arduino -->|D7 系統健康狀態| PLC
+    PLC -->|DO Y0 Main Contactor Relay| MOSFET
+    PLC -->|DO Y2 Speed Gate Signal| Arduino
+    PLC -->|DO Y1 Alarm Strobe / Buzzer| Alarms[Physical Alarm Horn / Strobe]
+    Arduino -->|D7 Heartbeat / Health Signal| PLC
 
     Arduino -->|Pin D9 5V PWM| MOSFET
-    MOSFET -->|24V 脈波調速| Fan
-    Fan -->|黃線 脈衝頻率| Tach
-    Tach -->|硬體外部中斷| Arduino
+    MOSFET -->|24V PWM Power Drive| Fan
+    Fan -->|Frequency Feedback| Tach
+    Tach -->|Hardware Interrupt INT0| Arduino
 ```
 
 ---
 
-## 2. 目錄結構 (Repository Layout)
+## 2. Repository Layout
 
 ```text
 edgeguard/
-├── README.md                      # 專案完整架構、接線指南與測試說明
-├── run_dashboard.py               # 儀表板一鍵啟動腳本 (支援仿真與實體硬體)
-├── .gitignore                     # Git 忽略配置檔
+├── README.md                      # Complete system documentation, wiring guide & verification procedures
+├── run_dashboard.py               # Standalone runner for SCADA dashboard (Simulated & Live modes)
+├── .gitignore                     # Git filter rules for Python, Arduino, and Delta PLC binaries
 │
-├── plc/                           # 台達電子 DVP-12SE11R PLC 程式與配置
-│   ├── README.md                  # PLC 載入說明與安全邏輯架構
-│   ├── edgeguard_dvp12se_ladder.il# 標準指令表 (Mnemonic / Instruction List)
-│   ├── edgeguard_dvp12se_ladder.txt# ASCII 視覺化階梯圖結構與註解
-│   ├── modbus_mapping.md          # 完整 Modbus TCP 點位對照表 (D/M/X/Y)
-│   ├── modbus_mapping.json        # 機器可讀 JSON 格式點位定義
-│   └── test_plc_modbus.py         # PLC 通訊測試與點位診斷 CLI 工具
+├── plc/                           # Delta Electronics DVP-12SE11R PLC assets
+│   ├── README.md                  # Ladder logic design rules & ISPSoft / WPLSoft upload guide
+│   ├── edgeguard_dvp12se_ladder.il# Standard Instruction List (Mnemonic representation)
+│   ├── edgeguard_dvp12se_ladder.txt# ASCII visualized ladder logic diagram with annotations
+│   ├── modbus_mapping.md          # Full Modbus TCP register map (D registers, M coils, X/Y I/O)
+│   ├── modbus_mapping.json        # Machine-readable Modbus schema for software gateways
+│   └── test_plc_modbus.py         # Python Modbus TCP diagnostic & verification tool
 │
-├── arduino/                       # Arduino UNO 風扇致動與轉速監測韌體
+├── arduino/                       # Arduino UNO fan actuator & tachometer firmware
 │   ├── src/
-│   │   └── edgeguard_fan_controller.ino # Arduino C++ 核心韌體
-│   ├── wiring_guide.md            # 電氣接線圖、MOSFET 隔離與安全規範
-│   └── test_serial.py             # 序列通訊測試與 RPM 即時監看工具
+│   │   └── edgeguard_fan_controller.ino # C++ firmware (PWM drive, tachometer ISR, 3s watchdog)
+│   ├── wiring_guide.md            # Electrical schematics, MOSFET isolation & pull-down safety
+│   └── test_serial.py             # Serial protocol CLI test utility & RPM monitor
 │
-└── dashboard/                     # 工業 SCADA Web 監控儀表板
-    ├── server.py                  # Python HTTP & SSE 伺服器 (內建電機物理引擎)
-    ├── requirements.txt           # 硬體連線選用套件 (pymodbus, pyserial)
+└── dashboard/                     # Industrial SCADA Web Telemetry Center
+    ├── server.py                  # Python HTTP & SSE server (Built-in motor physics model)
+    ├── requirements.txt           # Optional drivers for physical hardware (pymodbus, pyserial)
     └── static/
-        └── index.html             # SCADA 單頁式儀表板 (Tailwind + Canvas + Chart.js)
+        └── index.html             # High-performance SCADA Single Page App (Tailwind + Canvas + Chart.js)
 ```
 
 ---
 
-## 3. 台達 PLC 控制邏輯與 Modbus 對照表 (Delta PLC System)
+## 3. Delta PLC System Specification & Modbus Map
 
-### 3.1 實體 I/O 點位分配 (DVP-12SE11R)
+### 3.1 Physical I/O Allocation (Delta DVP-12SE11R)
 
-| 點位 | 類型 | 標記名稱 | 功能說明 | 正常狀態 |
+The Delta DVP-12SE11R is an Ethernet-enabled industrial slim PLC providing 8 digital inputs and 4 relay outputs:
+
+| Terminal | Type | Tag Name | Function Description | Normal State |
 |---|---|---|---|---|
-| **X0** | DI | `SW_MODE` | 運轉模式切換（1 = AUTO 模式，0 = MANUAL 模式） | 選擇開關 |
-| **X1** | DI | `E_STOP_PB` | 實體緊急停止按鈕（常閉 NC 接線：1 = 迴路正常，0 = 按下急停） | 常閉 NC (1) |
-| **X2** | DI | `RESET_PB` | 實體安全故障復歸按鈕（常開 NO 接線） | 常開 NO (0) |
-| **X3** | DI | `START_PB` | 工作站現地啟動按鈕 | 常開 NO (0) |
-| **X4** | DI | `STOP_PB` | 工作站現地停止按鈕 | 常閉 NC (1) |
-| **X5** | DI | `ARDUINO_OK`| Arduino 控制器健康與看門狗回授信號 | 5V 經光耦 (1) |
-| **Y0** | DO | `FAN_POWER` | 24V 風扇主電源接觸器繼電器 | 運轉導通 |
-| **Y1** | DO | `ALARM_LAMP`| 現場警報蜂鳴器與三色警示燈 | 故障觸發 |
-| **Y2** | DO | `SPEED_GATE`| 輸出至 Arduino 之轉速致能硬體信號 | 允許運轉 (1) |
-| **Y3** | DO | `HEARTBEAT` | PLC 運轉指示閃爍燈（Delta 特殊旗標 M1013 1Hz 方波） | 閃爍 (1Hz) |
+| **X0** | DI | `SW_MODE` | Operation mode selector (1 = AUTO mode, 0 = MANUAL mode) | Selector Switch |
+| **X1** | DI | `E_STOP_PB` | Emergency Stop button (**Normally Closed NC**: 1 = Healthy, 0 = Tripped/Broken) | Normally Closed (1) |
+| **X2** | DI | `RESET_PB` | Physical safety latch acknowledgment pushbutton (NO) | Normally Open (0) |
+| **X3** | DI | `START_PB` | Workstation local start pushbutton | Normally Open (0) |
+| **X4** | DI | `STOP_PB` | Workstation local stop pushbutton | Normally Closed (1) |
+| **X5** | DI | `ARDUINO_OK`| Arduino MCU health & watchdog feedback signal | Optocoupled (1) |
+| **Y0** | DO | `FAN_POWER` | 24V Fan main power contactor relay | Active High (Run) |
+| **Y1** | DO | `ALARM_LAMP`| Physical strobe beacon & alarm buzzer | Active High (Tripped) |
+| **Y2** | DO | `SPEED_GATE`| Hardware speed permit signal forwarded to Arduino | Active High (Permit) |
+| **Y3** | DO | `HEARTBEAT` | PLC running indicator (Driven by Delta M1013 1.0 Hz clock pulse) | Flashing (1 Hz) |
 
-### 3.2 Modbus TCP 暫存器配置 (Holding Registers & Coils)
+### 3.2 Modbus TCP Memory Mapping
 
-- **預設 IP 位址**：`192.168.1.5`，**連接埠**：`502`，**Slave ID**：`1`。
-- 台達 DVP 暫存器定址偏移：
-  - 保持暫存器（D Register）：位址從 `4096` (`0x1000`) 起算（`D0` = 4096）。
-  - 內部輔助線圈（M Coil）：位址從 `2048` (`0x0800`) 起算（`M0` = 2048）。
+- **Default IP Address**: `192.168.1.5`
+- **Port**: `502`
+- **Modbus Unit ID**: `1`
+- **Offset Standard**: Holding Registers start at `4096` (`0x1000`), Coils start at `2048` (`0x0800`).
 
-| Modbus 位址 | PLC 裝置 | 類型 | 存取 | 說明 | 數值範圍 / 單位 |
+| Modbus Address | Delta Register | Type | Access | Description | Range / Unit |
 |---|---|---|---|---|---|
-| **4096** | `D0` | INT16 | R/W | 運轉模式狀態 | 0: MANUAL, 1: AUTO, 2: FAULT |
-| **4097** | `D1` | INT16 | R | 安全系統綜合狀態 | 0: 正常, 1: 預警, 2: 自鎖停機, 3: 通訊逾時 |
-| **4098** | `D2` | INT16 | R/W | 風扇目標轉速設定值 | 0 ~ 100 (%) |
-| **4099** | `D3` | INT16 | R | 風扇實測轉速回授值 | 0 ~ 3000 (RPM) |
-| **4106** | `D10`| UINT16 | R/W | 上位機網關心跳計數器 (Heartbeat) | 每秒累加 1 |
-| **2048** | `M0` | Coil | R/W | AI 限制區闖入停機請求 | 1: 請求停機 |
-| **2058** | `M10`| Coil | R | AUTO 模式作用旗標 | 由 X0 與安全條件決定 |
-| **2059** | `M11`| Coil | R | MANUAL 模式作用旗標 | 由 X0 決定 |
-| **2068** | `M20`| Coil | R | 安全停機自鎖警報 (Trip Latch) | 需手動復歸方可解除 |
-| **2069** | `M21`| Coil | R/W | 上位機遠端復歸脈波指令 | 寫入 1 觸發清除自鎖 |
-| **2148** | `M100`| Coil | R | 通訊逾時看門狗警報 (T0 逾時 3 秒) | 1: 上位機斷線 |
+| **4096** (`0x1000`) | `D0` | INT16 | R/W | Control Mode Status | `0`: MANUAL, `1`: AUTO, `2`: FAULT |
+| **4097** (`0x1001`) | `D1` | INT16 | R | System Safety State | `0`: SAFE, `1`: WARNING, `2`: TRIPPED, `3`: COMM_FAULT |
+| **4098** (`0x1002`) | `D2` | INT16 | R/W | Fan Target Speed Setpoint | `0` ~ `100` (%) |
+| **4099** (`0x1003`) | `D3` | INT16 | R | Fan Actual Measured Speed | `0` ~ `3000` (RPM) |
+| **4106** (`0x100A`) | `D10` | UINT16 | R/W | Edge Gateway Watchdog Heartbeat | Increments every 1.0 s |
+| **2048** (`0x0800`) | `M0` | Coil | R/W | AI Restricted Zone Trip Request | `1`: Request Emergency Trip |
+| **2058** (`0x080A`) | `M10` | Coil | R | AUTO Mode Active Status Flag | Hardware reflected from X0 |
+| **2059** (`0x080B`) | `M11` | Coil | R | MANUAL Mode Active Status Flag | Reflected when X0 is OFF |
+| **2068** (`0x0814`) | `M20` | Coil | R | Safety Trip Latched Alarm | Latch requires manual reset |
+| **2069** (`0x0815`) | `M21` | Coil | R/W | Remote Software Reset Pulse | Pulse `1` to unlatch fault |
+| **2078** (`0x081E`) | `M30` | Coil | R/W | Remote Start Command | Starts load in AUTO mode |
+| **2079** (`0x081F`) | `M31` | Coil | R/W | Remote Stop Command | Stops load safely |
+| **2148** (`0x0864`) | `M100`| Coil | R | Communication Watchdog Timeout Alarm | Set if D10 freezes > 3.0 s |
 
 ---
 
-## 4. Arduino 韌體與 24V 風扇電路 (Arduino Subsystem)
+## 4. Arduino UNO Firmware & Fan Actuator Subsystem
 
-### 4.1 引腳配置與電氣保護
+### 4.1 Electrical Safety & Protection Rules
 
-1. **Pin D9 (Timer1 PWM 輸出)**：
-   - 經光耦隔離驅動 LR7843 功率 MOSFET 模組。
-   - **關鍵保護**：D9 與 Arduino GND 間必須跨接 **10kΩ 下拉電阻**，防止 Arduino 上電復歸浮空期間風扇誤啟動。
-2. **Pin D2 (硬體中斷 INT0)**：
-   - 連接風扇轉速信號線（Tachometer，通常為黃線或綠線）。
-   - 韌體內部啟動 `INPUT_PULLUP`，每轉產生 2 個脈波，透過中斷精確計數。
-3. **Pin D4 (PLC 運轉允許信號)**：
-   - 接收台達 PLC Y2 繼電器信號，若 PLC 斷開（例如急停或闖入自鎖），Arduino 即刻將 PWM 強制降為 0。
-4. **Pin D7 (健康輸出至 PLC X5)**：
-   - 輸出 HIGH 表示 Arduino 韌體運作正常且通訊看門狗未超時。
+> [!CAUTION]
+> **Never connect 24V DC directly to any Arduino pin.** All Arduino GPIO pins operate strictly at **5V TTL logic**. Exceeding 5V will permanently damage the microcontroller.
 
-### 4.2 序列通訊通訊協定 (Baud: 115200, 8N1)
+1. **Gate Pull-Down Resistor**:
+   - During power-on or bootloader reset, Arduino pin D9 defaults to a high-impedance input state.
+   - **An external 10kΩ pull-down resistor between D9 and GND is mandatory** to prevent floating gate voltages from unintentionally triggering the MOSFET.
+2. **Optocoupled Isolation**:
+   - An optocoupled MOSFET module (e.g., LR7843 / PC817) completely isolates the 5V logic ground from the noisy 24V motor inductive switching transients.
+3. **Tachometer Pull-Up**:
+   - The fan tachometer line (yellow wire) is open-collector. It connects to Arduino Pin D2 (INT0) with an internal `INPUT_PULLUP` enabled, capturing 2 pulses per revolution.
 
-| 指令 | 說明 | 回應格式 |
+### 4.2 Serial Command Protocol (115200 baud, 8N1)
+
+| Command | Function | Response Format |
 |---|---|---|
-| `PING` | 上位機心跳包（重設看門狗計時器） | `PONG` |
-| `SET <0-100>` | 設定風扇輸出百分比 | `ACK STATE=RUN SPEED=50 PWM=128 RPM=1420 ...` |
-| `STOP` | 立即停止風扇輸出 | `ACK STATE=STOP SPEED=0 PWM=0 ...` |
-| `STATUS` / `GET` | 查詢即時狀態與轉速 | `OK STATE=RUN SPEED=50 PWM=128 RPM=1420 ...` |
-| `SET_WD <ms>` | 調整看門狗超時長度（預設 3000ms） | `ACK WATCHDOG_MS=3000` |
+| `PING` | Watchdog heartbeat renewal | `PONG` |
+| `SET <0-100>` | Adjust fan speed percentage | `ACK STATE=RUN SPEED=50 PWM=128 RPM=1420 ...` |
+| `STOP` | Immediate zero-PWM shutdown | `ACK STATE=STOP SPEED=0 PWM=0 ...` |
+| `STATUS` / `GET` | Query state, PWM, and measured RPM | `OK STATE=RUN SPEED=50 PWM=128 RPM=1420 ...` |
+| `SET_WD <ms>` | Configure communication watchdog timeout | `ACK WATCHDOG_MS=3000` |
 
 ---
 
-## 5. 工業儀表板快速上手 (Quickstart Guide)
+## 5. SCADA Telemetry Dashboard Quickstart
 
-儀表板採用極簡架構設計，**使用 Python 內建標準庫即可立即執行**，無需預先安裝龐大環境！
+The EdgeGuard SCADA Dashboard is engineered to run **out-of-the-box using the Python standard library**, requiring zero external dependencies for demonstration!
 
-### 步驟 1：啟動儀表板（開箱即用仿真模式）
+### Step 1: Launch the Dashboard Server (Demo Simulation Mode)
 
 ```bash
-# 切換至專案目錄
+# Navigate to repository directory
 cd edgeguard
 
-# 啟動儀表板伺服器（預設啟動高擬真電機物理與 PLC 階梯圖模擬器）
+# Launch the unified dashboard server
 python3 run_dashboard.py
 ```
 
-終端將顯示：
+Console Output:
 ```text
 =================================================================
  EdgeGuard Industrial IoT SCADA & Telemetry Dashboard
@@ -189,40 +204,54 @@ python3 run_dashboard.py
 =================================================================
 ```
 
-### 步驟 2：在瀏覽器中開啟儀表板
+### Step 2: Open Dashboard in Browser
 
-以 Chrome 或 Edge 開啟：
-👉 **http://localhost:8080**
+Open Google Chrome or Microsoft Edge:  
+👉 **`http://localhost:8080`**
 
-### 步驟 3：連接實體台達 PLC 與 Arduino（現場部署模式）
+- **Live Tachometer Gauge**: High-fidelity circular canvas needle displaying 0–2800 RPM.
+- **Real-Time Telemetry Trend**: Chart.js graph plotting Fan RPM vs Speed Setpoint % at 10 Hz via Server-Sent Events.
+- **Interactive Control Desk**: Speed presets (0%, 25%, 50%, 75%, 100%), START/STOP controls, and AUTO/MANUAL toggle.
+- **PLC I/O Rack Inspector**: Live indicator bits for Discrete Inputs (X0–X5), Relay Outputs (Y0–Y3), and Holding Registers (D0, D1, D2, D3, D10).
+- **PoC AI Simulation Panel**: Trigger simulated zone intrusions to verify safety interlocks without needing an external camera.
 
-當現場具備台達 PLC 與 Arduino 實機時：
+### Step 3: Connect Physical Hardware (Live Deployment Mode)
+
+When physical Delta PLC and Arduino hardware are connected:
+
 ```bash
-# 安裝通訊驅動套件
+# Install optional hardware communication drivers
 pip install -r dashboard/requirements.txt
 
-# 以實機模式啟動，指定 PLC IP 與 Arduino COM 埠
-python3 run_dashboard.py --live --plc-ip 192.168.1.5 --serial-port /dev/cu.usbserial-110
+# Run in live mode with PLC IP and Arduino serial port
+python3 run_dashboard.py --live --plc-ip 192.168.1.5 --serial-port /dev/ttyACM0
 ```
 
 ---
 
-## 6. 四大核心互鎖行為驗證 (Safety Verification Procedure)
+## 6. Safety Verification & Fail-Safe Test Procedures
 
-在競賽展示或驗收時，可依循以下四個測試項目驗證系統安全韌性：
+The EdgeGuard system demonstrates four non-negotiable industrial safety behaviors:
 
-| 測試項目 | 操作步驟 | 預期階梯圖與致動行為 | 驗證之安全價值 |
+| Test Case | Operator Action | Expected Interlock Behavior | Verification Value |
 |---|---|---|---|
-| **1. 人員闖入限制區煞停** | 點擊儀表板「模擬人員進區」按鈕（或外接攝影機辨識到人體）。 | 1. 上位機置位 PLC `M0` 線圈。<br>2. 階梯圖自鎖 `M20` 警報旗標。<br>3. `Y0`（主電源繼電器）斷開，`Y1`（警報燈）點亮。<br>4. 風扇轉速迅速依慣性降為 0 RPM。 | 驗證感知事件能即時、可靠連動實體工業負載煞停。 |
-| **2. 離開區域不自動復歸** | 點擊「人員離開區域」按鈕。 | 1. 限制區雖恢復為 CLEAR。<br>2. **設備維持鎖定停止狀態**（`D1 = 2` TRIPPED）。<br>3. 必須顯式點擊「安全復歸 (RESET)」後才允許重啟。 | 符合 OSHA / ISO 13849 防護規範：危險解除後需人工審核確認，嚴禁突發性自動自啟。 |
-| **3. MANUAL 模式拒絕 AI** | 將模式開關切換為 `MANUAL`，再點擊「模擬人員進區」。 | 1. PLC 階梯圖 Network 3 互鎖生效，硬體屏蔽 `M0` 指令。<br>2. 儀表板僅顯示 WARNING 提示，設備不中斷運轉。 | 驗證現場操作人員擁有最高控制主權，AI 絕無越權控制之可能。 |
-| **4. 通訊斷線看門狗煞停** | 中斷上位機通訊超過 3.0 秒（或關閉儀表板進程）。 | 1. PLC 階梯圖計時器 `T0` 計時達 3000ms。<br>2. 觸發 `M100` 通訊警報，置位 `M20` 煞停負載。<br>3. Arduino 硬體看門狗亦同步歸零 PWM。 | 驗證離線系統在邊緣主機當機、網路線脫落時具備安全失效保證（Fail-Safe）。 |
+| **1. Restricted Zone Intrusion Trip** | Click **"Simulate Zone Ingress"** on the dashboard (or camera detects person in restricted zone). | 1. Gateway writes PLC coil `M0 = 1`.<br>2. PLC Ladder sets latch coil `M20 = 1`.<br>3. `Y0` opens (cutting fan power), `Y1` activates alarm strobe.<br>4. Fan RPM drops smoothly to 0 via inertia. | Verifies that AI perception events reliably actuate physical machinery trip sequences. |
+| **2. Mandatory Operator Reset (Anti-Auto-Restart)** | Click **"Personnel Clear Zone"**. | 1. Zone status reverts to `CLEAR`.<br>2. **Equipment remains strictly locked in STOP** (`D1 = 2 TRIPPED`).<br>3. Operator must explicitly click **RESET** to acknowledge clearance before restarting. | Adheres to ISO 13849 / OSHA machine guarding standards: clearing a hazard zone must **never** cause equipment to self-restart. |
+| **3. MANUAL Mode Rejects AI Override** | Switch mode to **`MANUAL`** (`X0 = 0`), then click **"Simulate Zone Ingress"**. | 1. PLC Network 3 interlock isolates `M0`.<br>2. AI trip request is rejected by hardware logic.<br>3. Dashboard flags an operator warning, but machine control is retained by manual operators. | Proves that human operators retain ultimate authority; AI cannot override manual maintenance mode. |
+| **4. Communication Watchdog Timeout** | Terminate the dashboard process or disconnect Ethernet for > 3.0 seconds. | 1. PLC Timer `T0` reaches preset 3000 ms.<br>2. PLC trips `M100` comm fault, tripping `M20` and de-energizing `Y0`.<br>3. Arduino watchdog also shuts down PWM. | Guarantees fail-safe shutdown if the edge host hangs or cables disconnect. |
 
 ---
 
-## 7. 競賽接軌規劃 (Roadmap to Stage II & ASUS UGen300)
+## 7. Competition Roadmap & Stage II Integration
 
-- **Stage I（初賽現況）**：已於台達 DVP-12SE11R PLC 與 Arduino UNO 基礎上打通「AI 事件感知 ➔ Modbus TCP 互鎖 ➔ PWM 致動 ➔ Tachometer 遙測 ➔ SCADA 儀表板」完整真實控制鏈路。
-- **Stage II（決賽規劃）**：
-  - 將視覺辨識模型（如輕量化 YOLO / EfficientDet）與事件推理 VLM 本地部署於 **ASUS UGen300（Hailo-10H NPU, 40 TOPS）** 專屬硬體加速模組。
-  - 驗證端到端（End-to-End）低延遲離線推論效能，落實「零雲端依賴」的邊緣工業工安守護神。
+- **Stage I (Preliminary PoC)**:
+  - Verified physical control chain: Local AI Perception ➔ Modbus TCP Gateway ➔ Delta DVP-12SE11R PLC Interlock ➔ Arduino PWM Actuation ➔ Tachometer RPM Feedback ➔ SCADA Web Telemetry.
+- **Stage II (Finals Deployment on ASUS UGen300)**:
+  - Deploy lightweight vision detectors and contextual Vision-Language Models (VLM) directly onto the **ASUS UGen300 (Hailo-10H NPU, 40 TOPS INT4, 8GB dedicated memory)**.
+  - Benchmark inference latency, frames-per-second, and complete 100% offline, zero-cloud operations for safety-critical factory deployments.
+
+---
+
+## 8. License
+
+This project is licensed under the [MIT License](LICENSE).
