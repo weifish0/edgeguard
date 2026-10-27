@@ -1,0 +1,41 @@
+# Operating System
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Arduino
+*.hex
+*.elf
+.arduino15/
+
+# Delta PLC / Editor Temporary files
+*.bak
+*.tmp
+*.log
