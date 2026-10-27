@@ -1,0 +1,94 @@
+================================================================================
+Delta DVP-12SE11R Ladder Logic Diagram (ASCII Representation)
+Project: EdgeGuard Industrial Safety & Fan Controller
+================================================================================
+
+[Network 1] Auto / Manual Mode Determination
+       X0 (AUTO Switch)                                  M10 (AUTO Flag)
+|------[ ]-------------------------------------------------( )----------|
+|                                                  [ MOV K1 D0 ]        |
+|                                                                       |
+|      X0 (AUTO Switch)                                  M11 (MANUAL Flag)
+|------[/]-------------------------------------------------( )----------|
+|                                                  [ MOV K0 D0 ]        |
+
+[Network 2] Hardware Emergency Stop Loop (Fail-Safe NC)
+       X1 (E-Stop NC contact opened)                     M20 (Trip Latch)
+|------[/]-------------------------------------------------(S)----------|
+
+[Network 3] AI Restricted Zone Intrusion (AUTO Mode Interlocked)
+       M10 (AUTO Mode)    M0 (AI Trip Req)               M20 (Trip Latch)
+|------[ ]----------------[ ]------------------------------(S)----------|
+
+[Network 4] AI Gateway Communication Watchdog Alarm
+       M10 (AUTO Mode)    M100 (Comm Fault)              M20 (Trip Latch)
+|------[ ]----------------[ ]------------------------------(S)----------|
+
+[Network 5] Alarm Strobe Output & Safety State Register
+       M20 (Trip Latched)                                Y1 (Alarm Strobe)
+|------[ ]-------------------------------------------------( )----------|
+|                                                  [ MOV K2 D1 ]        |
+|                                                                       |
+|      M20 (No Trip)                                     Y1 (Alarm Strobe)
+|------[/]-------------------------------------------------(R)----------|
+|                                                  [ MOV K0 D1 ]        |
+
+[Network 6] Safety Reset & Fault Clearing
+    +--[ ]--+   X1 (E-Stop OK)                           M20 (Trip Latch)
+    |   X2  |                                    +---------(R)----------|
+    | (PB)  |                                    |       M0 (AI Trip Req)
+    +--[ ]--+                                    +---------(R)----------|
+    |  M21  |                                    |       M21 (Remote RST)
+    | (Soft)|                                    +---------(R)----------|
+    +-------+                                      [ MOV K0 D1 ]        |
+
+[Network 7] Equipment Main Contactor Run (AUTO Mode)
+       M10        +--[ ]--+   X4     X5     M20    M100  Y0 (Fan Power)
+|------[ ]---+----|  M30  |---[ ]----[ ]----[/]----[/]-----(S)----------|
+             |    | (Rem) |
+             |    +--[ ]--+
+             |    |   X3  |
+             |    | (Loc) |
+             |    +-------+
+             |
+             |    +--[/]--+                              Y0 (Fan Power)
+             +----|   X4  |--------------------------------(R)----------|
+                  +--[ ]--+
+                  |  M31  |
+                  +--[ ]--+
+                  |  M20  |
+                  +--[ ]--+
+                  | M100  |
+                  +-------+
+
+[Network 8] Equipment Main Contactor Run (MANUAL Mode - Local PB Only)
+       M11        X3 (Start) X4 (Stop)      M20          Y0 (Fan Power)
+|------[ ]--------[ ]--------[ ]------------[/]------------(S)----------|
+|
+|      M11        +--[/]--+                              Y0 (Fan Power)
+|------[ ]---+----|   X4  |--------------------------------(R)----------|
+             |    +--[ ]--+
+             |    |  M20  |
+             |    +-------+
+
+[Network 9] Arduino Fan Speed Gate Signal
+       Y0 (Fan Power)     M20 (No Trip)                  Y2 (Speed Gate)
+|------[ ]----------------[/]------------------------------( )----------|
+
+[Network 10] Gateway Heartbeat Watchdog Timer (30 x 100ms = 3.0s)
+       [ D10 == D11 ]                                    [ TMR T0 K30 ]
+|------[====]----------------------------------------------(TMR)--------|
+|
+|      T0 (Timer Done)                                   M100 (Comm Alarm)
+|------[ ]-------------------------------------------------(S)----------|
+|
+|      [ D10 <> D11 ]                              [ MOV D10 D11 ]
+|------[<  >]--------------------------------------+-------(R) T0 ------|
+                                                   +-------(R) M100 ----|
+
+[Network 11] 1-Second Heartbeat Indicator LED
+       M1013 (1.0s Clock Pulse)                          Y3 (PLC Alive)
+|------[ ]-------------------------------------------------( )----------|
+
+[Network 12] End of Program
+|----------------------------------------------------------[ END ]------|

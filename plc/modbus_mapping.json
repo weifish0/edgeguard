@@ -1,0 +1,42 @@
+{
+  "device": "Delta DVP-12SE11R",
+  "protocol": "Modbus TCP",
+  "default_ip": "192.168.1.5",
+  "port": 502,
+  "unit_id": 1,
+  "holding_registers": {
+    "MODE_STATUS": { "address": 4096, "delta": "D0", "type": "int16", "access": "rw", "unit": "" },
+    "SAFETY_STATE": { "address": 4097, "delta": "D1", "type": "int16", "access": "r", "unit": "enum" },
+    "FAN_TARGET_SPEED": { "address": 4098, "delta": "D2", "type": "int16", "access": "rw", "unit": "%" },
+    "FAN_ACTUAL_RPM": { "address": 4099, "delta": "D3", "type": "int16", "access": "r", "unit": "RPM" },
+    "HEARTBEAT_GATEWAY": { "address": 4106, "delta": "D10", "type": "uint16", "access": "rw", "unit": "counter" },
+    "IDLE_TIMER_REMAINING": { "address": 4116, "delta": "D20", "type": "int16", "access": "r", "unit": "s" },
+    "FAULT_CODE": { "address": 4146, "delta": "D50", "type": "uint16", "access": "r", "unit": "bitmask" }
+  },
+  "coils": {
+    "AI_TRIP_REQUEST": { "address": 2048, "delta": "M0", "access": "rw" },
+    "AI_STANDBY_REQUEST": { "address": 2049, "delta": "M1", "access": "rw" },
+    "AI_SPEED_OVERRIDE": { "address": 2050, "delta": "M2", "access": "rw" },
+    "AUTO_MODE_ACTIVE": { "address": 2058, "delta": "M10", "access": "r" },
+    "MANUAL_MODE_ACTIVE": { "address": 2059, "delta": "M11", "access": "r" },
+    "TRIP_LATCHED": { "address": 2068, "delta": "M20", "access": "r" },
+    "REMOTE_RESET": { "address": 2069, "delta": "M21", "access": "rw" },
+    "REMOTE_START": { "address": 2078, "delta": "M30", "access": "rw" },
+    "REMOTE_STOP": { "address": 2079, "delta": "M31", "access": "rw" },
+    "COMM_WATCHDOG_ALARM": { "address": 2148, "delta": "M100", "access": "r" }
+  },
+  "discrete_inputs": {
+    "SW_MODE_AUTO": { "address": 1024, "delta": "X0" },
+    "E_STOP_NORMAL": { "address": 1025, "delta": "X1" },
+    "RESET_PB": { "address": 1026, "delta": "X2" },
+    "START_PB": { "address": 1027, "delta": "X3" },
+    "STOP_PB": { "address": 1028, "delta": "X4" },
+    "ARDUINO_HEALTHY": { "address": 1029, "delta": "X5" }
+  },
+  "discrete_outputs": {
+    "FAN_POWER_RELAY": { "address": 1280, "delta": "Y0" },
+    "ALARM_STROBE": { "address": 1281, "delta": "Y1" },
+    "SPEED_GATE": { "address": 1282, "delta": "Y2" },
+    "HEARTBEAT_LED": { "address": 1283, "delta": "Y3" }
+  }
+}
